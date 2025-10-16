@@ -67,6 +67,20 @@ def extract_content_from_url(url: str) -> dict:
     except Exception as e:
         logger.error(f"Content extraction error: {str(e)}")
         raise ValueError(f"Content extraction failed: {str(e)}")
+    
+
+def store_files_in_temp_path_lc_dir(files,user,db):
+    logger.info("Creating a temporary directory")
+    upload_directory = tempfile.mkdtemp()
+
+    for file in files:
+        file_upload = FileUplodBase(file_name=file.filename, file_id=generate_unique_id())
+        # insert_file_path(file_upload, user, db)
+        file_location = os.path.join(upload_directory, file.filename)
+        with open(file_location, "wb+") as file_object:
+            shutil.copyfileobj(file.file, file_object)
+
+    return upload_directory
   
    
 

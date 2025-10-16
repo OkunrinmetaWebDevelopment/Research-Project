@@ -11,6 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
 from supabase import create_client, Client
 from dotenv import load_dotenv
+import PyPDF2
+from io import BytesIO
 
 
 logger = logging.getLogger()
@@ -59,4 +61,131 @@ async def insert_article_from_url_to_supabase(article_data:dict):
                 status_code=500,
                 detail=f"Failed to save article: {str(e)}"
             )
-            
+
+
+def extract_text_from_pdf(file_content: bytes) -> str:
+    """
+    Extract text content from PDF file
+    
+    Args:
+        file_content: PDF file content as bytes
+        
+    Returns:
+        str: Extracted text content
+        
+    Raises:
+        ValueError: If extraction fails
+    """
+    try:
+        pdf_file = BytesIO(file_content)
+        pdf_reader = PyPDF2.PdfReader(pdf_file)
+        
+        if len(pdf_reader.pages) == 0:
+            raise ValueError("PDF file has no pages")
+        
+        # Extract text from all pages
+        text_content = []
+        for page_num, page in enumerate(pdf_reader.pages):
+            try:
+                text = page.extract_text()
+                if text.strip():
+                    text_content.append(text)
+            except Exception as e:
+                logger.warning(f"Failed to extract text from page {page_num}: {str(e)}")
+                continue
+        
+        if not text_content:
+            raise ValueError("No text content could be extracted from PDF")
+        
+        full_text = "\n\n".join(text_content)
+        logger.info(f"Successfully extracted {len(full_text)} characters from PDF")
+        
+        return full_text
+        
+    except PyPDF2.errors.PdfReadError as e:
+        logger.error(f"PDF reading error: {str(e)}")
+        raise ValueError("Invalid or corrupted PDF file")
+    except Exception as e:
+        logger.error(f"PDF extraction error: {str(e)}")
+        raise ValueError(f"PDF extraction failed: {str(e)}")
+
+
+async def insert_article_from_pdf_to_supabase(article_data: dict):
+    """
+    Insert article data into Supabase articles table
+    
+    Args:
+        article_data: Dictionary containing article fields
+        
+    Returns:
+        dict: Inserted article data
+        
+    Raises:
+        HTTPException: If database insertion fails
+    """
+    try:
+        result = supabase.table('articles').insert(article_data).execute()
+        
+        if not result.data:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to insert article into database"
+            )
+        
+        article = result.data[0]
+        logger.info(f"Successfully inserted article: {article['id']}")
+        
+        return article
+        
+    except Exception as e:
+        logger.error(f"Database insertion error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to save article: {str(e)}"
+        )
+
+
+def validate_file_size(size: int, max_size_mb: int = 10) -> bool:
+    """Validate file size doesn't exceed limit"""
+    max_bytes = max_size_mb * 1024 * 1024
+    return size <= max_bytes
+
+
+def validate_pdf_file(filename: str) -> bool:
+    """Validate file is a PDF"""
+    return filename.lower().endswith('.pdf')
+
+
+async def insert_article_from_pdf_to_supabase(article_data: dict):
+    """
+    Insert article data into Supabase articles table
+    
+    Args:
+        article_data: Dictionary containing article fields
+        
+    Returns:
+        dict: Inserted article data
+        
+    Raises:
+        HTTPException: If database insertion fails
+    """
+    try:
+        result = supabase.table('articles').insert(article_data).execute()
+        
+        if not result.data:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to insert article into database"
+            )
+        
+        article = result.data[0]
+        logger.info(f"Successfully inserted article: {article['id']}")
+        
+        return article
+        
+    except Exception as e:
+        logger.error(f"Database insertion error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to save article: {str(e)}"
+        )

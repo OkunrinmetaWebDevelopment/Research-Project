@@ -1,16 +1,20 @@
 import logging
 import os
+import shutil
+import tempfile
+from typing import List, Optional
 from auth.user import get_current_user_with_subscription
-from crud.research_crud import insert_article_from_url_to_supabase
-from schema.pydantic_models import QuestionResponse, TextInput, URLImportRequest, URLImportResponse
-from utility.ingest import chunk_text, create_embeddings, create_faiss_index, generate_questions_from_chunks, retrieve_relevant_chunks
+from schema.file_schema import DocumentCategory, DocumentUploadResponse
+from crud.research_crud import extract_text_from_pdf, insert_article_from_pdf_to_supabase, insert_article_from_url_to_supabase, validate_pdf_file
+from schema.pydantic_models import AnswerResponse, QuestionAnswerInput, QuestionResponse, TextInput, URLImportRequest, URLImportResponse
+from utility.ingest import answer_question_from_text, chunk_text, create_embeddings, create_faiss_index, generate_questions_from_chunks, retrieve_relevant_chunks
 from utility.llm_utils import get_available_llm, load_huggingface_llm
 from utility.extract_url_content import extract_content_from_url
 import trafilatura
 import json
 from datetime import datetime
 from fastembed import TextEmbedding
-from fastapi import FastAPI, HTTPException, Depends,APIRouter
+from fastapi import FastAPI, HTTPException, Depends, File, UploadFile, Form, BackgroundTasks,APIRouter
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
@@ -85,8 +89,9 @@ async def import_article_from_url(
             detail=f"An unexpected error occurred: {str(e)}"
         )
     
+
 @router.post("/generate-questions", response_model=QuestionResponse)
-async def generate_questions(input_data: TextInput):
+async def generate_questions(input_data: TextInput, user = Depends(get_current_user_with_subscription)):
     """
     Generate possible questions from the provided text using RAG.
     
@@ -154,3 +159,179 @@ async def generate_questions(input_data: TextInput):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
+
+
+@router.post("/upload-pdf-article")
+async def upload_pdf_article(
+    file: UploadFile = File(...),
+    title: Optional[str] = Form(None),
+    category_id: Optional[str] = Form(None),
+    is_published: bool = Form(False),
+    current_user = Depends(get_current_user_with_subscription)
+):
+    """
+    Upload a PDF file, extract content, and save as an article
+    
+    - **file**: PDF file to upload
+    - **title**: Optional title (if not provided, uses filename)
+    - **category_id**: Optional category UUID
+    - **is_published**: Whether to publish the article immediately
+    - Returns the created article details
+    """
+    try:
+        # Validate filename
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="Filename missing")
+        
+        # Validate file type
+        if not validate_pdf_file(file.filename):
+            raise HTTPException(
+                status_code=400,
+                detail="Only PDF files are supported"
+            )
+        
+        # Read file content
+        file_content = await file.read()
+        
+        # Validate file size
+        if not validate_file_size(len(file_content)):
+            raise HTTPException(
+                status_code=400,
+                detail="File exceeds size limit (10MB)"
+            )
+        
+        # Extract text from PDF
+        try:
+            extracted_text = extract_text_from_pdf(file_content)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        
+        # Use provided title or derive from filename
+        article_title = title if title else os.path.splitext(file.filename)[0]
+        
+        # Prepare article data for Supabase
+        article_data = {
+            "title": article_title,
+            "content": extracted_text,
+            "author_id": str(current_user.id),
+            "category_id": category_id,
+            "is_published": is_published,
+            "saved": True,
+            "url": None,
+            "published_at": datetime.utcnow().isoformat() if is_published else None,
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat(),
+            "upvotes": 0,
+            "downvotes": 0
+        }
+        
+        # Insert into database
+        article = await insert_article_from_pdf_to_supabase(article_data)
+        
+        return {
+            "success": True,
+            "article_id": article['id'],
+            "title": article['title'],
+            "content_length": len(extracted_text),
+            "message": "PDF article uploaded and saved successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in upload_pdf_article: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"An unexpected error occurred: {str(e)}"
+        )
+
+
+# Optional: Batch upload endpoint for multiple PDFs
+@router.post("/upload-pdf-articles-batch")
+async def upload_pdf_articles_batch(
+    files: List[UploadFile] = File(...),
+    category_id: Optional[str] = Form(None),
+    is_published: bool = Form(False),
+    current_user = Depends(get_current_user_with_subscription)
+):
+    """
+    Upload multiple PDF files and save each as a separate article
+    
+    - **files**: List of PDF files to upload
+    - **category_id**: Optional category UUID (applied to all articles)
+    - **is_published**: Whether to publish articles immediately
+    - Returns list of created article details
+    """
+    results = []
+    errors = []
+    
+    for file in files:
+        try:
+            # Validate file
+            if not file.filename or not validate_pdf_file(file.filename):
+                errors.append({
+                    "filename": file.filename or "unknown",
+                    "error": "Invalid file type"
+                })
+                continue
+            
+            # Read and validate size
+            file_content = await file.read()
+            if not validate_file_size(len(file_content)):
+                errors.append({
+                    "filename": file.filename,
+                    "error": "File exceeds size limit"
+                })
+                continue
+            
+            # Extract text
+            try:
+                extracted_text = extract_text_from_pdf(file_content)
+            except ValueError as e:
+                errors.append({
+                    "filename": file.filename,
+                    "error": str(e)
+                })
+                continue
+            
+            # Prepare article data
+            article_title = os.path.splitext(file.filename)[0]
+            article_data = {
+                "title": article_title,
+                "content": extracted_text,
+                "author_id": str(current_user.id),
+                "category_id": category_id,
+                "is_published": is_published,
+                "saved": True,
+                "url": None,
+                "published_at": datetime.utcnow().isoformat() if is_published else None,
+                "created_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.utcnow().isoformat(),
+                "upvotes": 0,
+                "downvotes": 0
+            }
+            
+            # Insert into database
+            article = await insert_article_from_pdf_to_supabase(article_data)
+            
+            results.append({
+                "success": True,
+                "filename": file.filename,
+                "article_id": article['id'],
+                "title": article['title'],
+                "content_length": len(extracted_text)
+            })
+            
+        except Exception as e:
+            logger.error(f"Error processing {file.filename}: {str(e)}")
+            errors.append({
+                "filename": file.filename,
+                "error": str(e)
+            })
+    
+    return {
+        "successful": len(results),
+        "failed": len(errors),
+        "results": results,
+        "errors": errors
+    }

@@ -4,6 +4,7 @@ import random
 import string
 import time
 
+from api.route import research
 from utility.llm_utils import get_available_llm, load_huggingface_llm
 from utility.redis_util import get_redis_client, sync_redis_to_supabase_background_worker
 from fastapi import FastAPI, Request
@@ -14,7 +15,11 @@ logger = logging.getLogger()
 
 
 def get_application():
-    app = FastAPI(title="", version=1.0)
+    app = FastAPI(
+        title="Research Project API",
+        description="API for article extraction and research management",
+        version="1.0.0",  # Must be a string
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -22,6 +27,8 @@ def get_application():
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    app.include_router(research.router)
 
     return app
 
