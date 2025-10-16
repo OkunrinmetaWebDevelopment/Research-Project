@@ -8,7 +8,7 @@ from schema.file_schema import DocumentCategory, DocumentUploadResponse
 from crud.research_crud import extract_content_from_url, extract_text_from_pdf, insert_article_from_pdf_to_supabase, insert_article_from_url_to_supabase, validate_file_size, validate_pdf_file
 from schema.pydantic_models import AnswerResponse, QuestionAnswerInput, QuestionResponse, TextInput, URLImportRequest, URLImportResponse
 from utility.ingest import answer_question_from_text, chunk_text, create_embeddings, create_faiss_index, generate_questions_from_chunks, retrieve_relevant_chunks
-from utility.llm_utils import get_available_llm, load_huggingface_llm
+from utility.llm_utils import get_available_llm, get_sambanova_llm, load_huggingface_llm
 import trafilatura
 import json
 from datetime import datetime
@@ -91,7 +91,7 @@ async def generate_questions(input_data: TextInput, user = Depends(get_current_u
     """
     try:
         try:
-            llm, model_name = get_available_llm()
+            llm, model_name = get_sambanova_llm()
         except ValueError as e:
             raise HTTPException(
                 status_code=503,
