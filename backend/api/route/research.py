@@ -5,11 +5,10 @@ import tempfile
 from typing import List, Optional
 from auth.user import get_current_user_with_subscription
 from schema.file_schema import DocumentCategory, DocumentUploadResponse
-from crud.research_crud import extract_text_from_pdf, insert_article_from_pdf_to_supabase, insert_article_from_url_to_supabase, validate_pdf_file
+from crud.research_crud import extract_content_from_url, extract_text_from_pdf, insert_article_from_pdf_to_supabase, insert_article_from_url_to_supabase, validate_file_size, validate_pdf_file
 from schema.pydantic_models import AnswerResponse, QuestionAnswerInput, QuestionResponse, TextInput, URLImportRequest, URLImportResponse
 from utility.ingest import answer_question_from_text, chunk_text, create_embeddings, create_faiss_index, generate_questions_from_chunks, retrieve_relevant_chunks
 from utility.llm_utils import get_available_llm, load_huggingface_llm
-from utility.extract_url_content import extract_content_from_url
 import trafilatura
 import json
 from datetime import datetime
@@ -50,16 +49,11 @@ async def import_article_from_url(
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         
-         # Optional: Add extracted metadata if available
-        if extracted_data.get('date'):
-            print("yes")
-            pass
-        
         # Prepare article data for Supabase
         article_data = {
             "title": extracted_data.get('title', 'Untitled Article'),
             "content": extracted_data.get('text', ''),
-            "author_id": user.id,
+            "author_id": str(user.id),  # Convert to string for UUID
             "url": url_str,
             "is_published": False,  
             "saved": True,
@@ -68,17 +62,10 @@ async def import_article_from_url(
             "updated_at": datetime.utcnow().isoformat(),
         }
         
-       
-
-        result = insert_article_from_url_to_supabase(article_data)
-
-        if not result.data:
-                raise HTTPException(
-                    status_code=500, 
-                    detail="Failed to insert article into database"
-                )
-        article = result.data[0]
-        logger.info(f"Successfully imported article: {article['id']}")
+        # FIXED: Added await keyword
+        result = await insert_article_from_url_to_supabase(article_data)
+        
+        return result
             
     except HTTPException:
         raise
@@ -246,7 +233,6 @@ async def upload_pdf_article(
         )
 
 
-# Optional: Batch upload endpoint for multiple PDFs
 @router.post("/upload-pdf-articles-batch")
 async def upload_pdf_articles_batch(
     files: List[UploadFile] = File(...),
