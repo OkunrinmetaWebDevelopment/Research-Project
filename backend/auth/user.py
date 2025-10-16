@@ -12,10 +12,9 @@ logger = logging.getLogger(__name__)
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 # Use your service role key here (keep it secret!)
 supabase: Client = create_client(
-    "https://siufubxbtoynxhugkfsd.supabase.co",
+    "https://tbtjwrklpnonueytzbsx.supabase.co",  # Update this
     SUPABASE_SERVICE_ROLE_KEY
 )
-
 security = HTTPBearer()
 
 async def get_current_user_with_subscription(credentials: HTTPAuthorizationCredentials = Depends(security)):
